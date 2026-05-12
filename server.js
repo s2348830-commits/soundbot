@@ -1,15 +1,21 @@
-const { Client, GatewayIntentBits, InteractionType, REST, Routes } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior } = require('@discordjs/voice');
+const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
+const { 
+    joinVoiceChannel, 
+    createAudioPlayer, 
+    createAudioResource, 
+    AudioPlayerStatus, 
+    NoSubscriberBehavior 
+} = require('@discordjs/voice');
 const play = require('play-dl');
 const express = require('express');
 const app = express();
 
-// --- 1. Render Keep-alive (Express) ---
+// --- 1. Render用 Webサーバー設定 (Keep-alive用) ---
 const PORT = process.env.PORT || 8080;
-app.get('/', (req, res) => res.send('Bot is Alive!'));
-app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+app.get('/', (req, res) => res.send('Bot is Online!'));
+app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
-// --- 2. Discord Bot Setup ---
+// --- 2. Discord Bot 設定 ---
 const TOKEN = process.env.DISCORD_TOKEN;
 const client = new Client({
     intents: [
@@ -23,45 +29,46 @@ const client = new Client({
 const commands = [
     {
         name: 'sound',
-        description: 'YouTubeから曲を再生します',
+        description: 'YouTubeのURLから曲を再生します',
         options: [
             {
                 name: 'url',
                 type: 3, // STRING
-                description: 'YouTubeのURL',
+                description: 'YouTubeのURL (例: https://www.youtube.com/watch?v=...)',
                 required: true,
             },
         ],
     },
 ];
 
-// --- 3. 起動時の処理 (コマンド登録) ---
+// 起動時処理
 client.once('ready', async () => {
     console.log(`${client.user.tag} としてログインしました。`);
     
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     try {
-        console.log('スラッシュコマンドを登録中...');
         await rest.put(
             Routes.applicationCommands(client.user.id),
             { body: commands },
         );
-        console.log('コマンドの登録に成功しました。');
+        console.log('スラッシュコマンドを登録しました。');
     } catch (error) {
-        console.error(error);
+        console.error('コマンド登録エラー:', error);
     }
 });
 
-// --- 4. コマンド実行のリスナー ---
+// コマンド実行
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     if (interaction.commandName === 'sound') {
-        const url = interaction.options.getString('url');
+        const rawUrl = interaction.options.getString('url');
         
-        // ユーザーがVCにいるか確認
+        // URLのクリーニング（&list= などの余計なパラメータを除去）
+        const url = rawUrl.split('&')[0];
+        
         if (!interaction.member.voice.channel) {
-            return interaction.reply({ content: '先にボイスチャンネルに参加してください！', ephemeral: true });
+            return interaction.reply({ content: '先にボイスチャンネルに参加してください。', ephemeral: true });
         }
 
         await interaction.deferReply();
@@ -74,8 +81,13 @@ client.on('interactionCreate', async interaction => {
         });
 
         try {
-            // YouTube動画をストリームとして取得
-            let stream = await play.stream(url);
+            // YouTubeからストリームを取得
+            // play-dlは自動的に適切なクエリを探します
+            let stream = await play.stream(url, {
+                quality: 2, // 最高音質設定
+                seek: 0
+            });
+
             const resource = createAudioResource(stream.stream, {
                 inputType: stream.type,
             });
@@ -87,20 +99,26 @@ client.on('interactionCreate', async interaction => {
             player.play(resource);
             connection.subscribe(player);
 
-            player.on(AudioPlayerStatus.Idle, () => {
-                // 再生終了時に5分待機してから切断（任意）
-                setTimeout(() => {
-                    if (player.state.status === AudioPlayerStatus.Idle) connection.destroy();
-                }, 300000);
+            // エラーハンドリング
+            player.on('error', error => {
+                console.error(`Player Error: ${error.message}`);
             });
 
-            await interaction.editReply(`再生を開始します: ${url}`);
+            player.on(AudioPlayerStatus.Idle, () => {
+                // 再生が終わったら自動で抜ける場合はここ（現在は接続維持）
+                // connection.destroy();
+            });
+
+            await interaction.editReply(`再生中 🎶: ${url}`);
         } catch (error) {
-            console.error(error);
-            await interaction.editReply('再生中にエラーが発生しました（URLが正しいか確認してください）。');
-            connection.destroy();
+            console.error('再生エラーの詳細:', error);
+            await interaction.editReply('再生中にエラーが発生しました。YouTubeの規制によりデータセンターからのアクセスが拒絶されている可能性があります。');
+            
+            // 接続をクリーンアップ
+            if (connection) connection.destroy();
         }
     }
 });
 
+// ログイン
 client.login(TOKEN);
