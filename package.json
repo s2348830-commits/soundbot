@@ -1,7 +1,6 @@
 {
   "name": "discord-music-bot",
   "version": "1.0.0",
-  "description": "Discord YouTube Bot for Render",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
